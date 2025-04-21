@@ -2,6 +2,7 @@ import os
 import math
 from PIL import Image
 import random
+import xlsxwriter
 
 # === STEP 1: Ekstraksi fitur dari gambar ===
 def extract_features(image_path, size=(8, 8)):
@@ -10,6 +11,31 @@ def extract_features(image_path, size=(8, 8)):
     pixels = list(image.getdata())  # list of pixel values
     return pixels
 
+def save_summary_to_excel(summaries, filename='tabel_probabilitas.xlsx'):
+    workbook = xlsxwriter.Workbook(filename)
+    worksheet = workbook.add_worksheet()
+
+    # Header
+    worksheet.write(0, 0, "Fitur")
+    col = 1
+    for label in summaries:
+        worksheet.write(0, col, f"{label} (mean)")
+        worksheet.write(0, col + 1, f"{label} (stddev)")
+        col += 2
+
+    # Isi
+    num_features = len(next(iter(summaries.values())))
+    for i in range(num_features):
+        worksheet.write(i + 1, 0, f"x{i+1}")
+        col = 1
+        for label in summaries:
+            mean, stddev = summaries[label][i]
+            worksheet.write(i + 1, col, mean)
+            worksheet.write(i + 1, col + 1, stddev)
+            col += 2
+
+    workbook.close()
+    
 # === STEP 2: Load dataset dari folder ===
 def load_dataset(dataset_path):
     data = []
@@ -20,7 +46,7 @@ def load_dataset(dataset_path):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
                 image_path = os.path.join(label_path, filename)
                 features = extract_features(image_path)
-                data.append({'label': label, 'features': features})
+                data.append({'label': label, 'features': features, 'filename': filename})
     return data
 
 # === STEP 3: Split manual train/test ===
@@ -91,26 +117,61 @@ if __name__ == "__main__":
 
     train_data, test_data = split_data(data)
     model = summarize_by_class(train_data)
+    
+    save_summary_to_excel(model)
+    print("📄 Tabel probabilitas disimpan ke 'tabel_probabilitas.xlsx'")
 
     print(f"Jumlah data train: {len(train_data)}, test: {len(test_data)}\n")
     benar = 0
     log_lines = []
 
+    # === Buat Excel baru untuk likelihood ===
+    workbook = xlsxwriter.Workbook("tabel_likelihood.xlsx")
+    sheet = workbook.add_worksheet("Likelihoods")
+
+    # Header
+    sheet.write(0, 0, "Test ke")
+    sheet.write(0, 1, "Nama File")
+    sheet.write(0, 2, "Actual")
+    col = 3
+    kelas_list = list(model.keys())
+    for label in kelas_list:
+        sheet.write(0, col, f"{label} (Likelihood)")
+        col += 1
+
     for i, test in enumerate(test_data):
-        pred = predict(model, test['features'])
+        input_vector = test['features']
+        probs = calculate_class_probabilities(model, input_vector)
+        pred = max(probs, key=probs.get)
         actual = test['label']
+
         if pred == actual:
             benar += 1
         line = f"[{i+1}] Asli: {actual:10s} → Prediksi: {pred:10s}"
         print(line)
         log_lines.append(line)
 
+        # Cari nama file (opsional, karena sebelumnya nggak disimpan)
+        # Update `load_dataset` dulu biar simpan nama file
+        filename = test.get('filename', '-')
+
+        # Tulis ke Excel
+        sheet.write(i + 1, 0, i + 1)
+        sheet.write(i + 1, 1, filename)
+        sheet.write(i + 1, 2, actual)
+        col = 3
+        for label in kelas_list:
+            sheet.write(i + 1, col, probs[label])
+            col += 1
     akurasi = benar / len(test_data) * 100
     akurasi_line = f"\n🎯 Akurasi: {akurasi:.2f}%"
     print(akurasi_line)
     log_lines.append(akurasi_line)
 
-    # Simpan ke file hasil_prediksi.txt
+    workbook.close()
+    print("📄 Tabel likelihood disimpan ke 'tabel_likelihood.xlsx'")
+
+    # Simpan log teks
     with open("hasil_prediksi.txt", "w", encoding="utf-8") as f:
         for line in log_lines:
             f.write(line + "\n")
